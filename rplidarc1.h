@@ -49,7 +49,7 @@ typedef struct _device_info {
     uint8_t firmware_minor;
     uint8_t firmware_major;
     uint8_t hardware;
-    char serial_number[16];
+    char serial_number[17];
 } device_info;
 #define DEVICE_INFO_PACKET_LENGTH 20
 const device_info di_empty = {0,0,0,0,0};
@@ -105,17 +105,20 @@ const scan_express_sample ses_empty = {}; //it's just completely empty
 // NONE of this code is tested! When we get the chance, do some trial runs to see that this does in fact operate as expected!
 class RPLidarC1 {
     private:
-        HardwareSerial lidar;
+        HardwareSerial lidarSerial;
 
         uint8_t rx_pin;
         uint8_t tx_pin;
-        uint8_t uart_num;
-        long baud;
+        uint8_t uart_number;
+        long baudrate;
 
     public:
         RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx, long baud);
         RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx);
         RPLidarC1(uint8_t rx, uint8_t tx);
+
+        // begin
+        void begin();
 
         //Send a command
         int send_request_packet(uint8_t cmd, uint8_t * payload, size_t pl_n);
@@ -152,12 +155,13 @@ class RPLidarC1 {
 
         void cmd_get_lidar_conf(uint8_t * payload, unsigned int pl_n); // oh GOD what the hell are you
 
-        // get strings
-        char * to_string(response_descriptor rd, char* buf, unsigned int n);
-        char * to_string(device_info di, char * buf, unsigned int n);
-        char * to_string(device_health dh, char * buf, unsigned int n);
-        char * to_string(device_sample_rate dsr, char * buf, unsigned int n);
-
-        char * to_string(scan_standard_sample sss, char * buf, unsigned int n);
-        char * to_string(scan_express_sample ses, char * buf, unsigned int n);
 };
+
+ // get strings
+char * to_string(response_descriptor rd, char* buf, unsigned int n);
+char * to_string(device_info di, char * buf, unsigned int n);
+char * to_string(device_health dh, char * buf, unsigned int n);
+char * to_string(device_sample_rate dsr, char * buf, unsigned int n);
+
+char * to_string(scan_standard_sample sss, char * buf, unsigned int n);
+char * to_string(scan_express_sample ses, char * buf, unsigned int n);

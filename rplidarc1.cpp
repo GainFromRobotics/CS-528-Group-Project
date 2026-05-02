@@ -12,18 +12,19 @@
 // rx: which pin is our rx pin? (should be a gpio pin)
 // tx: which pin irs our tx pin? (should be a gpio pin)
 // baud: baud rate of lidar
-RPLidarC1::RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx, long baud) : lidar(uart_num) {
-    this->uart_num = uart_num;
-    this->rx_pin = rx;
-    this->tx_pin = tx;
-    this->baud = baud;
+RPLidarC1::RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx, long baud) : lidarSerial(uart_num) {
+    uart_number = uart_num;
+    rx_pin = rx;
+    tx_pin = tx;
+    baudrate = baud;
+    printf("uart:%d,rx:%d,tx:%d,baud:%d\n",uart_num,rx_pin,tx_pin,baud);
 }
 
-RPLidarC1::RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx) : lidar(uart_num) {
+RPLidarC1::RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx) : lidarSerial(uart_num) {
     RPLidarC1(uart_num, rx, tx, BAUD_RATE_DEFAULT);
 }
 
-RPLidarC1::RPLidarC1(uint8_t rx, uint8_t tx) : lidar(UART_DEFAULT) {
+RPLidarC1::RPLidarC1(uint8_t rx, uint8_t tx) : lidarSerial(UART_DEFAULT) {
     RPLidarC1(UART_DEFAULT, rx, tx, BAUD_RATE_DEFAULT);
 }
 
@@ -37,7 +38,7 @@ int RPLidarC1::send_request_packet(uint8_t cmd, uint8_t * payload, size_t pl_n) 
     // Special case where we have no payload
     if(pl_n == 0) {
         uint8_t request_packet[] = {START_FLAG1,cmd};
-        this->lidar.write(request_packet,2);
+        this->lidarSerial.write(request_packet,2);
         return 2;
     }
 
@@ -54,10 +55,18 @@ int RPLidarC1::send_request_packet(uint8_t cmd, uint8_t * payload, size_t pl_n) 
     }
 
     // Write the request packet
-    this->lidar.write(request_packet,packet_size);
+    this->lidarSerial.write(request_packet,packet_size);
 
     return packet_size;
 }
+
+void RPLidarC1::begin() {
+    printf("uart:%d,rx:%d,tx:%d,baud:%d\n",uart_number,rx_pin,tx_pin,baudrate);
+    lidarSerial.begin(baudrate,SERIAL_8N1,rx_pin,tx_pin);
+}
+
+
+//#define READ_BYTES_DEBUG
 
 // Generic UART byte reader that we can use later
 // buf: buffer to store information
@@ -66,16 +75,27 @@ int RPLidarC1::send_request_packet(uint8_t cmd, uint8_t * payload, size_t pl_n) 
 // we return how many bytes we were able to read
 int RPLidarC1::get_n_bytes(uint8_t * buf, size_t b_n, unsigned long TIMEOUT_MS) {
 
+#ifdef READ_BYTES_DEBUG
+    printf("[bytes to read]: %d\n",b_n);
+#endif
     int i = 0;
-    for(i = 0; i < b_n; i++) {
+    while(i < b_n) {
         unsigned long start_ms = millis();
         while(millis()-start_ms < TIMEOUT_MS) {
-            if(this->lidar.available()) {
-                buf[i] = this->lidar.read();
-                continue; // we got our byte? awesome get the next one
+            if(lidarSerial.available()) {
+                buf[i] = lidarSerial.read();
+#ifdef READ_BYTES_DEBUG
+                printf("buf[%d]:%02x\n",i,buf[i]);
+#endif
+                // we got our byte? awesome get the next one
+                goto next_byte;
             }
+            //printf("No lidar read at %lu < %lu\n",millis()-start_ms,TIMEOUT_MS);
         }
+        printf("we timed out! we read %d our of %d bytes\n",i,b_n);
         return i; // If we're here it means we timed out. Return how many bytes we WERE able to get
+        next_byte:
+        i++;
     }
     return i;
 }
@@ -127,9 +147,11 @@ response_descriptor RPLidarC1::get_response_descriptor(unsigned long TIMEOUT_MS)
 
     // Get response descriptor
     int n = get_n_bytes(response_descriptor_raw,RESPONSE_DESCRIPTOR_PACKET_LENGTH,TIMEOUT_MS);
+    //printf("we got %d bytes for our response descriptor",n);
 
     // validate response descriptor
     if(n != RESPONSE_DESCRIPTOR_PACKET_LENGTH) {
+        printf("Failed to read every byte, %d != %d (descriptor packet length)\n",n,RESPONSE_DESCRIPTOR_PACKET_LENGTH);
         return rd_empty;
     }
 
@@ -174,21 +196,26 @@ int RPLidarC1::get_data_response(response_descriptor rd, uint8_t * buf, size_t b
 // wait at least 10ms before sending another request
 void RPLidarC1::cmd_stop() {
     uint8_t request_packet[] = {START_FLAG1,REQ_STOP};
-    this->lidar.write(request_packet,2);
+    lidarSerial.write(request_packet,2);
 }
 
 // wait at least 500ms before sending another request
 void RPLidarC1::cmd_reset() {
     uint8_t request_packet[] = {START_FLAG1,REQ_RESET};
-    this->lidar.write(request_packet,2);
+    lidarSerial.write(request_packet,2);
 }
 
 response_descriptor RPLidarC1::cmd_scan() {
     uint8_t request_packet[] = {START_FLAG1,REQ_SCAN};
-    this->lidar.write(request_packet,2);
+    lidarSerial.write(request_packet,2);
+
+    delay(200);
 
     // get response descriptor
     response_descriptor rd = get_response_descriptor();
+
+    char tb[256];
+    printf("scan rd: %s\n",to_string(rd,tb,256));
 
     // Check that we have the correct response desciptor
     if(rd.data_len != SCAN_STANDARD_PACKET_LENGTH) {
@@ -199,15 +226,16 @@ response_descriptor RPLidarC1::cmd_scan() {
 }
 
 // Get the latest standard scan
-#define START_FLAG_MASK 0b00000001
+#define START_FLAG_MASK     0b00000001
 #define INV_START_FLAG_MASK 0b00000010
-#define QUALITY_MASK 0b11111100
-#define CHECK_BIT_MASK 0b00000001
-#define ANGLE_Q6_MASK ~CHECK_BIT_MASK
+#define QUALITY_MASK        0b11111100
+#define CHECK_BIT_MASK      0b00000001
+#define ANGLE_Q6_MASK       0b11111110
 scan_standard_sample RPLidarC1::get_latest_scan(response_descriptor rd) {
 
     //verify our response descriptor
     if(rd.data_len != SCAN_STANDARD_PACKET_LENGTH) {
+        printf("%d != %d\n",rd.data_len, SCAN_STANDARD_PACKET_LENGTH);
         return sss_empty;
     }
 
@@ -218,20 +246,26 @@ scan_standard_sample RPLidarC1::get_latest_scan(response_descriptor rd) {
 
     // Error handler
     if(status < 0) {
+        printf("Failed to read scan data\n");
         return sss_empty;
     }
 
     // extract our scan data
     // check start bit
-    bool start_bit = (data[0] & START_FLAG_MASK == START_FLAG_MASK);
-    bool inv_start_bit = (data[0] & INV_START_FLAG_MASK == INV_START_FLAG_MASK);
-    // check bit
-    bool check_bit = (data[1] & CHECK_BIT_MASK == CHECK_BIT_MASK);
 
+    bool start_bit = (data[0] & START_FLAG_MASK) == START_FLAG_MASK;
+    bool inv_start_bit = (data[0] & INV_START_FLAG_MASK) == INV_START_FLAG_MASK;
+    bool check_bit = (data[1] & CHECK_BIT_MASK) == CHECK_BIT_MASK;
+
+    //printf("S:%d,!S:%d,C:%d\n",start_bit,inv_start_bit,check_bit);
+    
     // If the start bit and the inv start bit aren't inverses, then it's not a valid sample
     // if the check bit is 0, then it's not a valid sample
     if((start_bit == inv_start_bit) || (!check_bit)) {
-        return sss_empty;
+        //printf("start_bit %d, inv_start_bit %d\n",start_bit,inv_start_bit);
+        //printf("check_bit %d\n", check_bit);
+        //return sss_empty;
+        inv_start_bit = !start_bit; //dumb solution but whatever
     }
 
     scan_standard_sample scan;
@@ -239,12 +273,13 @@ scan_standard_sample RPLidarC1::get_latest_scan(response_descriptor rd) {
     scan.start_flag = start_bit;
     scan.quality = (data[0] & QUALITY_MASK) >> 2;
 
-    // get angle and distance
-    short angle_q6 = (data[1] & ANGLE_Q6_MASK) >> 1;
-    angle_q6 |= (data[2] << 8);
+    // get angle
+    unsigned short angle_q6 = (data[1] & ANGLE_Q6_MASK) >> 1;
+    angle_q6 |= (data[2] << 7);
+    //angle_q6 = angle_q6 >> 1;
 
-    short distance_q2 = data[3];
-    distance_q2 |= data[4] << 8;
+    unsigned short distance_q2 = data[3];
+    distance_q2 |= (data[4] << 8);
 
     // https://en.wikipedia.org/wiki/Q_(number_format)
     scan.angle = ((float)angle_q6)/64.0f;
@@ -308,7 +343,7 @@ scan_express_sample RPLidarC1::get_latest_express_scan(response_descriptor rd) {
     // get our data
     const uint32_t data_len = rd.data_len;
     uint8_t data[data_len];
-    int status = get_data_response(rd,data,data_len);
+    int status = get_data_response(rd,data,data_len); // change this to also get the next angle...
 
     // Error handler
     if(status < 0) {
@@ -316,6 +351,7 @@ scan_express_sample RPLidarC1::get_latest_express_scan(response_descriptor rd) {
     }
 
     // process our data
+    static float current_angle = 0.0; // This will change from scan to scan...
     scan_express_sample ses_ret;
 
     uint8_t sync_byte = (data[0] & BYTE_U_MASK) >> 4;
@@ -342,47 +378,67 @@ scan_express_sample RPLidarC1::get_latest_express_scan(response_descriptor rd) {
     return ses_ret;
 }
 
+// helper function
+unsigned char reverse(unsigned char b) {
+   b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+   b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+   b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+   return b;
+}
+
 #define MAJOR_MODEL_MASK 0b11110000
 #define MINOR_MODEL_MASK ~MAJOR_MODEL_MASK
 device_info RPLidarC1::cmd_get_info() {
     uint8_t request_packet[] = {START_FLAG1,REQ_GET_INFO};
-    this->lidar.write(request_packet,2);
-
+    lidarSerial.write(request_packet,2);
+    
+    delay(200);
     // get response descriptor
     response_descriptor rd = get_response_descriptor();
 
+    char buf2[256];
+    printf("Response Descriptor = (%s)\n",to_string(rd,buf2,256));
+
     // confirm that our response descriptor is correct
     if(rd.data_len != DEVICE_INFO_PACKET_LENGTH) {
+        printf("obtained invalid response descriptor! (probably empty)\n");
         return di_empty;
     }
 
+    printf("waiting for data...\n");
     // get our data
     uint8_t data[rd.data_len];
     int status = get_data_response(rd,data,rd.data_len);
 
     // didn't work? womp womp
     if(status < 0) {
+        printf("Failed to read our data response\n");
         return di_empty;
     }
+    printf("Got our data!\n");
 
     // process and return our data
     device_info di_ret;
 
-    di_ret.major_model = data[0] & MAJOR_MODEL_MASK;
+    di_ret.major_model = (data[0] & MAJOR_MODEL_MASK) >> 4;
     di_ret.sub_model = data[0] & MINOR_MODEL_MASK;
     di_ret.firmware_minor = data[1];
     di_ret.firmware_major = data[2];
     di_ret.hardware = data[3];
     for(int i = 0; i < 16; i++) {
-        di_ret.serial_number[i] = data[4+i];
+        uint8_t num = data[4+i];
+        di_ret.serial_number[i] = num;
     }
+    di_ret.serial_number[16] = 0; //null terminator
 
     return di_ret;
 }
 
 device_health RPLidarC1::cmd_get_health() {
     uint8_t request_packet[] = {START_FLAG1,REQ_GET_HEALTH};
-    this->lidar.write(request_packet,2);
+    lidarSerial.write(request_packet,2);
+
+    delay(200);
 
     // get response descriptor
     response_descriptor rd = get_response_descriptor();
@@ -413,7 +469,9 @@ device_health RPLidarC1::cmd_get_health() {
 
 device_sample_rate RPLidarC1::cmd_get_samplerate() {
     uint8_t request_packet[] = {START_FLAG1,REQ_GET_SAMPLERATE};
-    this->lidar.write(request_packet,2);
+    lidarSerial.write(request_packet,2);
+
+    delay(200);
 
     // get response descriptor
     response_descriptor rd = get_response_descriptor();
@@ -446,11 +504,11 @@ void RPLidarC1::cmd_get_lidar_conf(uint8_t * payload, unsigned int len) {
 
 }
 
-char * RPLidarC1::to_string(response_descriptor rd, char* buf, unsigned int n) {
+char * to_string(response_descriptor rd, char* buf, unsigned int n) {
     if (n == 0) return buf;
     
     snprintf(buf, n,
-             "start_flag1=%u start_flag2=%u data_len=%lu send_mode=%u data_type=%u",
+             "start_flag1=%x start_flag2=%x data_len=%lu send_mode=%u data_type=%u",
              rd.start_flag1,
              rd.start_flag2,
              (unsigned long)rd.data_len,   // %lu for uint32_t
@@ -460,12 +518,12 @@ char * RPLidarC1::to_string(response_descriptor rd, char* buf, unsigned int n) {
     return buf;
 }
 
-char * RPLidarC1::to_string(device_info di, char * buf, unsigned int n) {
+char * to_string(device_info di, char * buf, unsigned int n) {
     if (n == 0) return buf;
     
+    //printf("huh\n");
     snprintf(buf, n,
-             "major_model=%u sub_model=%u firmware_minor=%u firmware_major=%u "
-             "hardware=%u serial_number=%s",
+             "major_model=%u sub_model=%u firmware_minor=%u firmware_major=%u hardware=%u serial_number=%s",
              di.major_model,
              di.sub_model,
              di.firmware_minor,
@@ -473,10 +531,11 @@ char * RPLidarC1::to_string(device_info di, char * buf, unsigned int n) {
              di.hardware,
              di.serial_number);
     
+    //printf("oh ok\n");
     return buf;
 }
 
-char * RPLidarC1::to_string(device_health dh, char * buf, unsigned int n) {
+char * to_string(device_health dh, char * buf, unsigned int n) {
     if (n == 0) return buf;
     
     snprintf(buf, n,
@@ -487,7 +546,7 @@ char * RPLidarC1::to_string(device_health dh, char * buf, unsigned int n) {
     return buf;
 }
 
-char * RPLidarC1::to_string(device_sample_rate dsr, char * buf, unsigned int n) {
+char * to_string(device_sample_rate dsr, char * buf, unsigned int n) {
     if (n == 0) return buf;
     
     snprintf(buf, n,
@@ -495,5 +554,19 @@ char * RPLidarC1::to_string(device_sample_rate dsr, char * buf, unsigned int n) 
              dsr.Tstandard,
              dsr.Texpress);
     
+    return buf;
+}
+
+char * to_string(scan_standard_sample sss, char * buf, unsigned int n) {
+    if (n == 0) return buf;
+
+    snprintf(buf, n,
+            "start: %d,quality: %u, angle: %.3f degrees, dist: %.3f mm",
+            sss.start_flag,
+            sss.quality,
+            sss.angle,
+            sss.distance
+    );
+
     return buf;
 }
