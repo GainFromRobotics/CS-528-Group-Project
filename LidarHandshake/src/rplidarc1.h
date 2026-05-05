@@ -112,13 +112,48 @@ class RPLidarC1 {
         uint8_t uart_number;
         long baudrate;
 
+        // UART error flags
+        bool uart_break_error = false;
+        bool uart_buffer_full_error = false;
+        bool uart_fifo_ovf_error = false;
+        bool uart_frame_error = false;
+        bool uart_parity_error = false;
+        bool uart_unknown_error = false;
+
     public:
         RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx, long baud);
         RPLidarC1(uint8_t uart_num, uint8_t rx, uint8_t tx);
         RPLidarC1(uint8_t rx, uint8_t tx);
 
+        void onUartError(hardwareSerial_error_t err);
         // begin
         void begin();
+
+        // Error flag getters
+        bool hasUartBreakError() const { return uart_break_error; }
+        bool hasUartBufferFullError() const { return uart_buffer_full_error; }
+        bool hasUartFifoOvfError() const { return uart_fifo_ovf_error; }
+        bool hasUartFrameError() const { return uart_frame_error; }
+        bool hasUartParityError() const { return uart_parity_error; }
+        bool hasUartUnknownError() const { return uart_unknown_error; }
+        
+        // Check if any UART errors occurred
+        bool hasAnyUartError() const {
+            return uart_break_error || uart_buffer_full_error || uart_fifo_ovf_error ||
+                   uart_frame_error || uart_parity_error || uart_unknown_error;
+        }
+        
+        // Print which error flags are set
+        void printUartErrors() const;
+        
+        void clearUartErrors() {
+            uart_break_error = false;
+            uart_buffer_full_error = false;
+            uart_fifo_ovf_error = false;
+            uart_frame_error = false;
+            uart_parity_error = false;
+            uart_unknown_error = false;
+        }
 
         //Send a command
         int send_request_packet(uint8_t cmd, uint8_t * payload, size_t pl_n);

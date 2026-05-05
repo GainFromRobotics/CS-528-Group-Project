@@ -28,6 +28,55 @@ RPLidarC1::RPLidarC1(uint8_t rx, uint8_t tx) : lidarSerial(UART_DEFAULT) {
     RPLidarC1(UART_DEFAULT, rx, tx, BAUD_RATE_DEFAULT);
 }
 
+void RPLidarC1::printUartErrors() const {
+    if (!hasAnyUartError()) {
+        return;
+    }
+    
+    Serial.println("UART Errors detected:");
+    if (uart_break_error) Serial.println("  - UART Break Error");
+    if (uart_buffer_full_error) Serial.println("  - UART Buffer Full Error");
+    if (uart_fifo_ovf_error) Serial.println("  - UART FIFO Overflow Error");
+    if (uart_frame_error) Serial.println("  - UART Frame Error");
+    if (uart_parity_error) Serial.println("  - UART Parity Error");
+    if (uart_unknown_error) Serial.println("  - Unknown UART Error");
+}
+
+void RPLidarC1::onUartError(hardwareSerial_error_t err) {
+    switch (err) {
+        case UART_BREAK_ERROR:
+            uart_break_error = true;
+            break;
+        case UART_BUFFER_FULL_ERROR:
+            // Increase your Software RX buffer size using setRxBufferSize() before calling begin()
+            uart_buffer_full_error = true;
+            break;
+        case UART_FIFO_OVF_ERROR:
+            // A critical error, likely because data wasn't read fast enough.
+            uart_fifo_ovf_error = true;
+            break;
+        case UART_FRAME_ERROR:
+            // This often points to a baud rate mismatch or a bad electrical connection.
+            uart_frame_error = true;
+            break;
+        case UART_PARITY_ERROR:
+            // Check your serial configuration (e.g., SERIAL_8N1).
+            uart_parity_error = true;
+            break;
+        default:
+            uart_unknown_error = true;
+            break;
+    }
+    // CRITICAL: After an error, you MUST flush the RX buffer to recover.
+    // Recovering from a UART_FIFO_OVF_ERROR may require resetting the UART driver.
+    // For simplicity, the example below flushes the buffer and re-initializes the port.
+    // Depending on your application, you might need a more robust strategy (like resetting the entire UART peripheral).
+    lidarSerial.end();
+    delay(50); // Small delay to allow the driver to fully de-initialize
+    lidarSerial.begin(baudrate, SERIAL_8N1, rx_pin, tx_pin);
+}
+
+
 // Sends a request packet with a payload that we can send to the lidar
 // cmd: the command byte
 // payload: custom payload. This will depend onthe command
@@ -63,42 +112,60 @@ int RPLidarC1::send_request_packet(uint8_t cmd, uint8_t * payload, size_t pl_n) 
 void RPLidarC1::begin() {
     printf("uart:%d,rx:%d,tx:%d,baud:%d\n",uart_number,rx_pin,tx_pin,baudrate);
     lidarSerial.begin(baudrate,SERIAL_8N1,rx_pin,tx_pin);
+    lidarSerial.onReceiveError(std::bind(&RPLidarC1::onUartError, this, std::placeholders::_1));
 }
 
 
-//#define READ_BYTES_DEBUG
+#define READ_BYTES_DEBUG
 
 // Generic UART byte reader that we can use later
 // buf: buffer to store information
 // b_n: sie of buffer
 // TIMEOUT_MS: timeout before we give up on reading our data
 // we return how many bytes we were able to read
-int RPLidarC1::get_n_bytes(uint8_t * buf, size_t b_n, unsigned long TIMEOUT_MS) {
+int RPLidarC1::get_n_bytes(uint8_t *buf, size_t b_n, unsigned long TIMEOUT_MS) {
+    
+    size_t received = 0;
 
+    while (received < b_n) {
+        // Read as many as possible in one go
+        while (received < b_n && lidarSerial.available()) {
+            buf[received] = lidarSerial.read();
 #ifdef READ_BYTES_DEBUG
-    printf("[bytes to read]: %d\n",b_n);
+            Serial.printf("buf[%d]:0x%02X\n", received, buf[received]);
 #endif
-    int i = 0;
-    while(i < b_n) {
-        unsigned long start_ms = millis();
-        while(millis()-start_ms < TIMEOUT_MS) {
-            if(lidarSerial.available()) {
-                buf[i] = lidarSerial.read();
-#ifdef READ_BYTES_DEBUG
-                printf("buf[%d]:%02x\n",i,buf[i]);
-#endif
-                // we got our byte? awesome get the next one
-                goto next_byte;
-            }
-            //printf("No lidar read at %lu < %lu\n",millis()-start_ms,TIMEOUT_MS);
+            received++;
         }
-        printf("we timed out! we read %d our of %d bytes\n",i,b_n);
-        return i; // If we're here it means we timed out. Return how many bytes we WERE able to get
-        next_byte:
-        i++;
+
+        // Check if we have all the bytes we need
+        if (received >= b_n) {
+            break;
+        }
+        
+        unsigned long start = millis();
+        // Check for timeout only if we haven't received any data in this iteration
+        if (millis() - start >= TIMEOUT_MS) {
+            Serial.printf("Timeout after %d/%d bytes\n", received, b_n);
+            // Discard any remaining data in the FIFO to avoid misalignment
+            while (lidarSerial.available()) lidarSerial.read();
+            return received;  // partial read
+        }
+
+        // Optional: check for UART hardware errors
+        // if (lidarSerial.hasOverrun()) {
+        //     Serial.println("UART overrun error – flushing");
+        //     lidarSerial.clearWriteError(); // or clearOverrun() depending on API
+        //     // Flush bad data
+        //     while (lidarSerial.available()) lidarSerial.read();
+        //     return received;  // or reset and retry?
+        // }
+
+        // Small yield to let other tasks run (if using an RTOS or WiFi)
+        delay(1);
     }
-    return i;
+    return received;
 }
+
 
 int RPLidarC1::get_n_bytes(uint8_t * buf, size_t b_n) {
     return get_n_bytes(buf,b_n,TIMEOUT_MS_DEFAULT);

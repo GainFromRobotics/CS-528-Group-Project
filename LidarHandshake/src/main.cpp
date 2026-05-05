@@ -19,6 +19,8 @@ HardwareSerial LidarSerial(2);
 #endif
 
 void setup() {
+  delay(3000);
+
   
   Serial.begin(115200); // USB Debug Monitor
   while (!Serial);
@@ -30,7 +32,6 @@ void setup() {
   LidarSerial.begin(460800, SERIAL_8N1, RPLIDAR_RX, RPLIDAR_TX);
 #endif
   
-  delay(3000);
   Serial.println("ESP32 RPLIDAR C1 Handshake Test");
   
 #ifdef TEST_MY_LIBRARY
@@ -65,6 +66,8 @@ void setup() {
   //}
 
   scan_standard_rd = rplidarc1.cmd_scan();
+
+  delay(100);
   
   // test stop
   //rplidarc1.cmd_stop();
@@ -83,11 +86,15 @@ void setup() {
   
 }
 
+char tempbuf[256];
 void loop() {
 
 #ifdef TEST_MY_LIBRARY
   // When we get our scan data we'll need to eventually render it to our external renderer
   scan_standard_sample sample = rplidarc1.get_latest_scan(scan_standard_rd);
+
+  printf("CURRENT SCAN: %s\n",to_string(sample,tempbuf,256));
+  rplidarc1.printUartErrors();
 
   // Empty / invalid sample from parser
   if (sample.distance <= 0 || sample.angle < 0 || sample.angle >= 360) {
